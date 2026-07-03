@@ -1,0 +1,401 @@
+import React, { useState, useEffect } from 'react';
+import { Play, RotateCcw, Check, ArrowRight, BookOpen, X } from 'lucide-react';
+
+// --- 난이도별 스테이지 구성 ---
+const DIFFICULTY_LEVELS = {
+  beginner: {
+    id: 'beginner',
+    name: "초급반",
+    desc: "기초 합의 법칙 배우기",
+    color: "bg-sky-500 hover:bg-sky-400 shadow-sky-500/30",
+    stages: [
+      { id: 1, title: "튜토리얼: 길 막아보기", desc: "빈 칸을 클릭해 바위를 놓아보세요. A에서 B로 가는 경우의 수가 딱 '3'이 되게 만들어보세요!", rows: 3, cols: 3, goal: 3 },
+      { id: 2, title: "조금 더 넓은 미로", desc: "바위를 적절히 배치해서 도착지 B에 도착하는 숫자를 '7'로 만들어보세요.", rows: 4, cols: 4, goal: 7 },
+      { id: 3, title: "파스칼의 퍼즐", desc: "숫자의 흐름을 관찰하며 요리조리 막아보세요. 목표 숫자는 '15'입니다!", rows: 5, cols: 5, goal: 15 }
+    ]
+  },
+  medium: {
+    id: 'medium',
+    name: "중급반",
+    desc: "더 넓은 맵과 복잡한 경로 제어",
+    color: "bg-indigo-500 hover:bg-indigo-400 shadow-indigo-500/30",
+    stages: [
+      { id: 1, title: "중급의 시작", desc: "맵이 조금 더 넓어졌습니다. B로 가는 경로를 '24'로 만들어보세요.", rows: 5, cols: 5, goal: 24 },
+      { id: 2, title: "정밀한 차단", desc: "경로를 크게 줄여야 합니다. 바위를 활용해 목표 숫자 '14'를 맞추세요.", rows: 6, cols: 6, goal: 14 },
+      { id: 3, title: "절반의 확률", desc: "목표 숫자는 '100'입니다. 크게 도는 길과 좁은 길을 섞어보세요.", rows: 6, cols: 6, goal: 100 }
+    ]
+  },
+  hard: {
+    id: 'hard',
+    name: "고급반",
+    desc: "파스칼 마스터를 위한 극한의 도전",
+    color: "bg-rose-500 hover:bg-rose-400 shadow-rose-500/30",
+    stages: [
+      { id: 1, title: "소수(Prime) 만들기", desc: "목표 숫자는 '13'입니다. 많은 바위가 필요할 거예요!", rows: 6, cols: 6, goal: 13 },
+      { id: 2, title: "거대한 미로", desc: "7x7 미로입니다. 촘촘하게 막아 목표 숫자 '120'을 달성하세요.", rows: 7, cols: 7, goal: 120 },
+      { id: 3, title: "최종 보스", desc: "최종 목표는 '333'입니다. 당신의 기하학적 직관력을 믿으세요!", rows: 7, cols: 7, goal: 333 }
+    ]
+  }
+};
+
+export default function App() {
+  const [difficulty, setDifficulty] = useState('beginner');
+  const [currentStageIdx, setCurrentStageIdx] = useState(0);
+  const [gameState, setGameState] = useState('lobby'); // 'lobby', 'playing', 'clear', 'all_clear'
+  const [obstacles, setObstacles] = useState([]); // "r-c" 형태의 문자열 배열
+  const [gridValues, setGridValues] = useState([]);
+
+  // --- 룰북 모달 상태 추가 ---
+  const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
+
+  // --- 타이머 상태 추가 ---
+  const [stageTime, setStageTime] = useState(0);
+  const [totalTime, setTotalTime] = useState(0);
+
+  const currentLevel = DIFFICULTY_LEVELS[difficulty];
+  const stage = currentLevel.stages[currentStageIdx];
+  const start = { r: 0, c: 0 };
+  const end = stage ? { r: stage.rows - 1, c: stage.cols - 1 } : { r: 0, c: 0 };
+
+  // --- 타이머 로직 ---
+  useEffect(() => {
+    let timerId;
+    if (gameState === 'playing') {
+      timerId = setInterval(() => {
+        setStageTime(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(timerId);
+  }, [gameState]);
+
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m > 0 ? m + '분 ' : ''}${s}초`;
+  };
+
+  // --- 스테이지 초기화 ---
+  const resetStage = () => {
+    setObstacles([]);
+    setStageTime(0);
+    calculatePaths([]);
+  };
+
+  useEffect(() => {
+    if (stage) resetStage();
+  }, [currentStageIdx]);
+
+  // --- 경로 계산 (가장 기본적이고 쉬운 합의 법칙) ---
+  const calculatePaths = (currentObstacles) => {
+    if (!stage) return;
+    const { rows, cols } = stage;
+    let dp = Array(rows).fill(0).map(() => Array(cols).fill(0));
+    
+    dp[0][0] = 1; // 출발지는 항상 1가지 방법
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (r === 0 && c === 0) continue; // 출발지는 건너뜀
+        
+        // 만약 이 칸이 바위(장애물)라면 갈 수 있는 방법은 0
+        if (currentObstacles.includes(`${r}-${c}`)) {
+          dp[r][c] = 0;
+          continue;
+        }
+
+        const fromTop = r > 0 ? dp[r-1][c] : 0;
+        const fromLeft = c > 0 ? dp[r][c-1] : 0;
+        
+        // 합의 법칙: 위에서 오는 경우 + 왼쪽에서 오는 경우
+        dp[r][c] = fromTop + fromLeft;
+      }
+    }
+    setGridValues(dp);
+  };
+
+  // 장애물이 바뀔 때마다 즉시 계산
+  useEffect(() => {
+    calculatePaths(obstacles);
+  }, [obstacles]);
+
+  // --- 칸 클릭 시 장애물 설치/제거 ---
+  const handleCellClick = (r, c) => {
+    if (gameState !== 'playing') return;
+    if (r === start.r && c === start.c) return; // 출발지 변경 불가
+    if (r === end.r && c === end.c) return; // 도착지 변경 불가
+
+    const cellKey = `${r}-${c}`;
+    setObstacles(prev => {
+      if (prev.includes(cellKey)) {
+        return prev.filter(key => key !== cellKey); // 제거
+      } else {
+        return [...prev, cellKey]; // 추가
+      }
+    });
+  };
+
+  // --- 정답 확인 ---
+  const checkAnswer = () => {
+    const currentPaths = gridValues[end.r]?.[end.c] || 0;
+    if (currentPaths === stage.goal) {
+      setTotalTime(prev => prev + stageTime);
+      if (currentStageIdx + 1 < currentLevel.stages.length) {
+        setGameState('clear');
+      } else {
+        setGameState('all_clear');
+      }
+    } else {
+      alert(`아직 아닙니다! 현재 경로는 ${currentPaths}가지입니다. 목표는 ${stage.goal}가지입니다.`);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-sky-50 text-slate-800 font-sans flex flex-col items-center justify-center p-6 selection:bg-sky-200">
+      <style>{`
+        @keyframes popIn {
+          0% { transform: scale(0.7); opacity: 0; }
+          45% { transform: scale(1.05); opacity: 1; }
+          75% { transform: scale(0.95); }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop-in {
+          animation: popIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+        }
+      `}</style>
+      
+      {/* 글로벌 룰북 버튼 */}
+      <button 
+        onClick={() => setIsRuleModalOpen(true)}
+        className="fixed top-4 right-4 md:top-6 md:right-6 bg-white/90 backdrop-blur px-4 py-2 rounded-full shadow-md border border-sky-100 flex items-center gap-2 text-sky-600 font-bold hover:bg-sky-50 hover:scale-105 transition-all z-40"
+      >
+        <BookOpen className="w-5 h-5" /> 게임 규칙
+      </button>
+
+      {/* 1. 로비 화면 */}
+      {gameState === 'lobby' && (
+        <div className="bg-white p-10 rounded-3xl shadow-xl max-w-md w-full text-center">
+          <div className="text-5xl mb-4">🧩</div>
+          <h1 className="text-3xl font-black text-sky-600 mb-2">파스칼의 미로</h1>
+          <p className="text-slate-500 mb-8 font-medium">원하는 난이도를 선택해 도전하세요!</p>
+          
+          <div className="bg-sky-50 p-4 rounded-xl text-sm text-sky-800 text-left mb-8 space-y-2">
+            <p>1. 목표 숫자가 주어집니다.</p>
+            <p>2. 빈 칸을 클릭하면 <b>바위(장애물)</b>가 생깁니다.</p>
+            <p>3. 바위를 요리조리 놓아서 목표 숫자와 똑같이 맞춰보세요!</p>
+          </div>
+
+          <div className="space-y-3">
+            {Object.values(DIFFICULTY_LEVELS).map(level => (
+              <button 
+                key={level.id}
+                onClick={() => {
+                  setDifficulty(level.id);
+                  setCurrentStageIdx(0);
+                  setTotalTime(0);
+                  setGameState('playing');
+                }}
+                className={`w-full py-4 text-white rounded-2xl font-bold text-lg shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${level.color}`}
+              >
+                <Play className="w-5 h-5 fill-current" /> {level.name} 시작
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 2. 게임 화면 */}
+      {gameState === 'playing' && stage && (
+        <div className="max-w-4xl w-full flex flex-col md:flex-row gap-6">
+          
+          {/* 왼쪽: 미로 격자 */}
+          <div className="flex-1 bg-white p-6 md:p-8 rounded-3xl shadow-xl flex flex-col items-center justify-center">
+            <div 
+              className="grid gap-2"
+              style={{
+                gridTemplateRows: `repeat(${stage.rows}, minmax(60px, 1fr))`,
+                gridTemplateColumns: `repeat(${stage.cols}, minmax(60px, 1fr))`
+              }}
+            >
+              {Array(stage.rows).fill(0).map((_, r) => (
+                Array(stage.cols).fill(0).map((_, c) => {
+                  const isStart = r === start.r && c === start.c;
+                  const isEnd = r === end.r && c === end.c;
+                  const isObstacle = obstacles.includes(`${r}-${c}`);
+                  const paths = gridValues[r]?.[c] || 0;
+                  
+                  // 큰 격자(6x6 이상)일 때 셀 크기 조절
+                  const isLargeGrid = stage.cols >= 6;
+                  const cellClass = isLargeGrid ? 'w-12 h-12 md:w-16 md:h-16 rounded-xl' : 'w-16 h-16 md:w-20 md:h-20 rounded-2xl';
+                  const textClass = isLargeGrid ? 'text-lg md:text-xl' : 'text-xl md:text-2xl';
+                  const rockClass = isLargeGrid ? 'text-2xl' : 'text-3xl';
+
+                  return (
+                    <div 
+                      key={`${r}-${c}`}
+                      onClick={() => handleCellClick(r, c)}
+                      className={`
+                        ${cellClass} flex flex-col items-center justify-center cursor-pointer transition-all border-2
+                        ${isStart ? 'bg-indigo-500 border-indigo-600 text-white shadow-lg' : 
+                          isEnd ? 'bg-emerald-500 border-emerald-600 text-white shadow-lg animate-pulse' : 
+                          isObstacle ? 'bg-slate-700 border-slate-800 text-transparent scale-95 shadow-inner' : 
+                          'bg-sky-50 border-sky-100 hover:bg-sky-100 text-slate-700'}
+                      `}
+                    >
+                      {isObstacle ? (
+                        <span className={rockClass}>🪨</span>
+                      ) : (
+                        <>
+                          <span className={`font-black ${textClass}`}>{isStart ? 'A' : isEnd ? 'B' : paths}</span>
+                          <span className="text-[10px] opacity-70 font-bold">{isStart ? '출발' : isEnd ? paths : ''}</span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })
+              ))}
+            </div>
+            <p className="text-slate-400 text-sm mt-6 font-medium">※ 길은 오직 오른쪽(▶)과 아래쪽(▼)으로만 갈 수 있습니다.</p>
+          </div>
+
+          {/* 오른쪽: 조작 패널 */}
+          <div className="w-full md:w-80 space-y-4">
+            
+            <div className="bg-white p-6 rounded-3xl shadow-xl text-center">
+              <span className="inline-block px-3 py-1 bg-sky-100 text-sky-600 font-bold text-xs rounded-full mb-3">{currentLevel.name} - STAGE {stage.id}</span>
+              <h2 className="text-xl font-black mb-2">{stage.title}</h2>
+              <p className="text-sm text-slate-500 mb-6">{stage.desc}</p>
+              
+              <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl mb-6">
+                <span className="text-sm text-slate-500 font-bold block mb-1">현재 도착지(B) 경로 수</span>
+                <span className="text-4xl font-black text-sky-500">{gridValues[end.r]?.[end.c] || 0}</span>
+                <span className="text-sm text-slate-400 font-bold ml-2">/ 목표: {stage.goal}</span>
+              </div>
+
+              <div className="flex gap-2">
+                <button 
+                  onClick={resetStage}
+                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl flex items-center justify-center gap-1 transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" /> 다시하기
+                </button>
+                <button 
+                  onClick={checkAnswer}
+                  className="flex-[2] py-3 bg-emerald-500 hover:bg-emerald-400 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/30 flex items-center justify-center gap-2 transition-all active:scale-95"
+                >
+                  <Check className="w-5 h-5" /> 정답 확인
+                </button>
+              </div>
+            </div>
+
+          </div>
+          
+          {/* 오른쪽 하단 플로팅 타이머 */}
+          <div className="fixed bottom-6 right-6 bg-white/95 backdrop-blur-sm px-5 py-3 rounded-2xl shadow-xl border border-sky-100 flex items-center gap-3 animate-fadeIn">
+            <span className="text-2xl animate-pulse">⏱️</span>
+            <div className="flex flex-col">
+              <span className="text-[10px] text-slate-400 font-bold leading-none mb-1">소요 시간</span>
+              <span className="text-sky-600 font-black text-lg leading-none">{formatTime(stageTime)}</span>
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* 3. 스테이지 클리어 화면 */}
+      {gameState === 'clear' && (
+        <div className="bg-white p-10 rounded-3xl shadow-xl max-w-sm w-full text-center animate-pop-in">
+          <div className="text-6xl mb-4">🎉</div>
+          <h2 className="text-2xl font-black text-emerald-500 mb-2">정답입니다!</h2>
+          <p className="text-slate-500 mb-6 font-medium">목표 숫자를 정확히 맞췄어요!</p>
+          
+          <div className="bg-emerald-50 text-emerald-600 p-3 rounded-xl font-bold mb-8 text-sm">
+            ⏱️ 스테이지 기록: {formatTime(stageTime)}
+          </div>
+          
+          <button 
+            onClick={() => {
+              setCurrentStageIdx(prev => prev + 1);
+              setGameState('playing');
+            }}
+            className="w-full py-4 bg-sky-500 hover:bg-sky-400 text-white rounded-2xl font-bold text-lg shadow-lg shadow-sky-500/30 flex items-center justify-center gap-2 transition-all active:scale-95"
+          >
+            다음 단계로 <ArrowRight className="w-5 h-5" />
+          </button>
+        </div>
+      )}
+
+      {/* 4. 모든 스테이지 클리어 (엔딩) */}
+      {gameState === 'all_clear' && (
+        <div className="bg-white p-10 rounded-3xl shadow-xl max-w-md w-full text-center animate-pop-in">
+          <div className="text-6xl mb-4">🏆</div>
+          <h2 className="text-3xl font-black text-amber-500 mb-2">{currentLevel.name} 클리어!</h2>
+          <p className="text-slate-600 mb-6 font-medium">모든 퍼즐을 완벽하게 풀었습니다!<br/>다른 난이도에도 도전해볼까요?</p>
+          
+          <div className="bg-amber-50 border border-amber-100 p-5 rounded-2xl mb-8">
+            <span className="text-sm text-amber-600/70 font-bold block mb-1">전체 총 소요 시간</span>
+            <span className="text-4xl font-black text-amber-500">{formatTime(totalTime)}</span>
+            <span className="text-xs text-amber-600/60 font-bold block mt-2">이 기록으로 멋진 상을 받을 수 있을지도 몰라요!</span>
+          </div>
+          
+          <button 
+            onClick={() => {
+              setCurrentStageIdx(0);
+              setGameState('lobby');
+            }}
+            className="w-full py-4 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-bold text-lg transition-all active:scale-95"
+          >
+            로비로 돌아가기
+          </button>
+        </div>
+      )}
+
+      {/* 5. 룰북 모달 */}
+      {isRuleModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-6 animate-fadeIn">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden animate-pop-in">
+            <div className="bg-sky-500 p-5 flex items-center justify-between">
+              <h3 className="text-white font-black text-xl flex items-center gap-2">
+                <BookOpen className="w-6 h-6" /> 게임 규칙
+              </h3>
+              <button 
+                onClick={() => setIsRuleModalOpen(false)}
+                className="text-white/80 hover:text-white bg-sky-600/50 hover:bg-sky-600 p-1.5 rounded-xl transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-5 text-sm text-slate-700 font-medium">
+              <div className="flex gap-3 items-start">
+                <span className="text-xl">🏁</span>
+                <p className="pt-0.5">미로의 <b>시작점(A)</b>에서 <b>도착점(B)</b>까지 가는 최단 경로의 수를 구하는 퍼즐입니다.</p>
+              </div>
+              <div className="flex gap-3 items-start">
+                <span className="text-xl">➡️</span>
+                <p className="pt-0.5">길은 오직 <b>오른쪽(▶)</b>과 <b>아래쪽(▼)</b>으로만 갈 수 있습니다.</p>
+              </div>
+              <div className="flex gap-3 items-start">
+                <span className="text-xl">🪨</span>
+                <p className="pt-0.5">빈 칸을 클릭하면 <b>바위(장애물)</b>가 설치되며, 해당 칸으로는 지나갈 수 없게 됩니다.</p>
+              </div>
+              <div className="flex gap-3 items-start">
+                <span className="text-xl">🎯</span>
+                <p className="pt-0.5">바위를 이리저리 놓아보며 도착점 B에 도달하는 경로의 수를 주어진 <b>목표 숫자</b>와 정확히 일치시키면 승리합니다!</p>
+              </div>
+              <div className="bg-sky-50 p-4 rounded-xl text-sky-800 text-xs mt-2 leading-relaxed">
+                <b>💡 팁:</b> '합의 법칙'에 의해 특정 칸에 도달하는 방법의 수는 (위쪽 칸의 경로 수) + (왼쪽 칸의 경로 수)가 됩니다. 바위를 놓으면 이 흐름을 끊고 숫자를 조작할 수 있습니다!
+              </div>
+            </div>
+            <div className="p-4 bg-slate-50 border-t border-slate-100">
+              <button 
+                onClick={() => setIsRuleModalOpen(false)}
+                className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors shadow-md"
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
